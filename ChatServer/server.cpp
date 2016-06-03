@@ -10,53 +10,147 @@
 #define SERVER_PORT 12345
 #define BUFFER_SIZE 4096
 #define QUEUE_SIZE 10
+#define EXIT_COMMAND "/q"
 
 struct Client {
+	Client(): socketId(0), clientName(""), lastMessageReceived(0) {}
 	SOCKET socketId;
 	std::string clientName;
+	int32_t lastMessageReceived;
 };
 
-void * clientThread(void * clientData) {
-	Client * client = reinterpret_cast<Client *>(clientData);
-	printf_s("Client's socket = %d || ", client->socketId);
+std::vector<Client *> gClients;
+pthread_mutex_t t_clientsLock = PTHREAD_MUTEX_INITIALIZER;
+std::vector<std::string> gChatHistory;
+pthread_mutex_t t_chatHistoryLock = PTHREAD_MUTEX_INITIALIZER;
+
+const uint32_t ClientsSize() {
+	pthread_mutex_lock(&t_chatHistoryLock);
+	uint32_t size = gClients.size();
+	pthread_mutex_unlock(&t_chatHistoryLock);
+	return size;
+}
+
+const uint32_t ChatHistorySize() {
+	pthread_mutex_lock(&t_chatHistoryLock);
+	uint32_t size = gChatHistory.size();
+	pthread_mutex_unlock(&t_chatHistoryLock);
+	return size;
+}
+
+const std::string ReadMessage(const int index) {
+	pthread_mutex_lock(&t_chatHistoryLock);
+	std::string retStr = gChatHistory.at(index);
+	pthread_mutex_unlock(&t_chatHistoryLock);
+	return retStr;
+}
+
+void InsertMessage(const std::string& str) {
+	pthread_mutex_lock(&t_chatHistoryLock);
+	gChatHistory.push_back(str);
+	pthread_mutex_unlock(&t_chatHistoryLock);
+}
+
+//creates local copy of client's info and only needs access to gClients to set their name
+void * thread_clientManager(void * clientData) {
+	Client * clientPtr = reinterpret_cast<Client *>(clientData);
+	Client client;
 	char buffer[BUFFER_SIZE];
 	memset(&buffer, 0, BUFFER_SIZE);
+	std::string newMessage;
+	int32_t lastMessageRead = 0;
 	int32_t rec = 0;
 	int32_t totalRec = 0;
-	recv(client->socketId, buffer, BUFFER_SIZE, 0);
-	client->clientName = buffer;
-	memset(&buffer, 0, strlen(client->clientName.c_str()));
-	printf_s("Client's name = %s\n", client->clientName.c_str());
+	pthread_mutex_lock(&t_clientsLock);
+	recv(clientPtr->socketId, buffer, BUFFER_SIZE, 0);
+	clientPtr->clientName = buffer;
+	client = *clientPtr;
+	pthread_mutex_unlock(&t_clientsLock);
+	printf_s("Client's socket = %d || ", client.socketId);
+	printf_s("Client's name = %s\n", client.clientName.c_str());
 	while (1) {
 		totalRec = 0;
 		rec = 0;
 		memset(&buffer, 0, BUFFER_SIZE);
 		do {
-			rec = recv(client->socketId, buffer + totalRec, BUFFER_SIZE, 0);
+			rec = recv(client.socketId, buffer + totalRec, BUFFER_SIZE, 0);
 			totalRec += rec;
 			printf_s("\nrec:%d | totalRecv: %d\n", rec, totalRec);
-			printf_s("Buffer: %s", buffer);
-			printf_s("Buffer[totalRec-1]: %d", buffer[totalRec - 1]);
-			printf_s("Buffer[totalRec]: %d", buffer[totalRec]);
 		} while (buffer[totalRec] != '\0');
-		//add to message's list, then send all pending messages (when can access this data
-		std::string answer = std::string(client->clientName).append(": ").append(buffer);
-		send(client->socketId, answer.c_str(), answer.size(), 0);
+		if (!strcmp(buffer, EXIT_COMMAND)) {
+			closesocket(client.socketId);
+			printf_s("%s has disconnected\n", client.clientName.c_str());
+			pthread_exit(nullptr);
+			return 0;
+		}
+		//add message to history
+		pthread_mutex_lock(&t_clientsLock);
+		newMessage = client.clientName;
+		pthread_mutex_unlock(&t_clientsLock);
+		InsertMessage(newMessage.append(": ").append(buffer).append("\n"));
 	}
-	pthread_exit(nullptr);
 	return 0;
 }
 
-
+//reads messages and sends new messages to each client
+void * thread_serverReader(void * params) {
+	int32_t messageLength;
+	int32_t bytesSent = 0;
+	int32_t totalSent = 0;
+	int32_t clientIndex = 0;
+	uint32_t lastMessage = 0;
+	std::string message;
+	while (1) {
+		if (ClientsSize() != 0) {
+			if (clientIndex >= ClientsSize()) {
+				clientIndex = 0;
+			}
+			pthread_mutex_lock(&t_clientsLock);
+			Client * clItr = gClients.at(clientIndex);
+			lastMessage = clItr->lastMessageReceived;
+			if (clItr != nullptr && clItr->clientName != "") {
+				pthread_mutex_unlock(&t_clientsLock);
+				uint32_t size = ChatHistorySize();
+				if (lastMessage < size) {
+					//if sent
+					pthread_mutex_lock(&t_clientsLock);
+					clItr->lastMessageReceived++;
+					pthread_mutex_unlock(&t_clientsLock);
+					printf_s("SENT");
+				}
+				/*pthread_mutex_lock(&t_clientsLock);
+				while (clItr->lastMessageReceived < ChatHistorySize()) {
+					pthread_mutex_unlock(&t_clientsLock);
+					totalSent = 0;
+					bytesSent = 0;
+					pthread_mutex_lock(&t_clientsLock);
+					message = ReadMessage(clItr->lastMessageReceived++).c_str();
+					messageLength = strlen(message.c_str());
+					do {
+						bytesSent = send(clItr->socketId, message.c_str(), messageLength, 0);
+						totalSent += bytesSent;
+					} while (totalSent < messageLength);
+					pthread_mutex_unlock(&t_clientsLock);
+					printf_s("SENT %s\n", message.c_str());
+				}*/
+			} else {
+				pthread_mutex_unlock(&t_clientsLock);
+			}
+			clientIndex++;
+		}
+	}
+}
 
 int main() {
 	WSADATA wsaData;
 	int on = 1;
 	SOCKET listeningSocket;
-	std::vector<Client *> clients;
 	sockaddr_in servInfo;
 	sockaddr_in clientInfo;
 	char buffer[BUFFER_SIZE];
+	//thread to send all updates to clients
+	pthread_t t_reader;
+	pthread_create(&t_reader, nullptr, thread_serverReader, nullptr);
 
 	//init WSA
 	int wsaErr = WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -101,10 +195,12 @@ int main() {
 			char clientIP[INET_ADDRSTRLEN];
 			inet_ntop(AF_INET, &clientInfo.sin_addr, clientIP, sizeof(clientIP));
 			printf_s("Accepted connection from %s\n", clientIP);
-			clients.push_back(newClient);
+			pthread_mutex_lock(&t_clientsLock);
+			gClients.push_back(newClient);
+			pthread_mutex_unlock(&t_clientsLock);
 			pthread_t newThread;
 			pthread_create(&newThread, nullptr,
-				clientThread, reinterpret_cast<void *>(newClient));
+				thread_clientManager, reinterpret_cast<void *>(newClient));
 		}
 	}
 

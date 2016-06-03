@@ -9,12 +9,32 @@
 #define SERVER_PORT "12345"
 #define BUFFER_SIZE 4096
 const char * EXIT_COMMAND = "/q";
+bool connActive = false;
+
+void * thread_clientReader(void * socketHandle) {
+	SOCKET socket = reinterpret_cast<SOCKET>(socketHandle);
+	char buffer[BUFFER_SIZE];
+	int32_t rec;
+	int32_t totalRec;
+	while (connActive) {
+		rec = 0;
+		totalRec = 0;
+		memset(&buffer, 0, BUFFER_SIZE);
+		do {
+			rec = recv(socket, buffer + totalRec, BUFFER_SIZE, 0);
+			totalRec += rec;
+		} while (buffer[totalRec] != '\0');
+		printf_s("\n%s", buffer);
+	}
+	return 0;
+}
 
 int main(int argc, char *argv[]) {
 	SOCKET socketHandle;
 	WSADATA wsaData;
 	char inputBuffer[BUFFER_SIZE];
 	memset(inputBuffer, 0, sizeof(inputBuffer));
+	pthread_t t_reader;
 	
 	if (argc < 2)
 		return -1;
@@ -61,6 +81,10 @@ int main(int argc, char *argv[]) {
 	}
 	freeaddrinfo(servInfo);
 	if (socketHandle != INVALID_SOCKET) {
+		connActive = true;
+		pthread_create(&t_reader, nullptr, thread_clientReader,
+			reinterpret_cast<void *>(socketHandle));
+
 		int32_t messageLength;
 		int32_t bytesSent = 0;
 		int32_t totalSent = 0;
@@ -85,11 +109,6 @@ int main(int argc, char *argv[]) {
 			//get input
 			memset(&inputBuffer, 0, BUFFER_SIZE);
 			gets_s(inputBuffer, _countof(inputBuffer));
-			//exit command
-			if (!strcmp(inputBuffer, EXIT_COMMAND)) {
-				//send to the server a message to close
-				break;
-			}
 			totalSent = 0;
 			bytesSent = 0;
 			messageLength = strlen(inputBuffer);
@@ -97,9 +116,14 @@ int main(int argc, char *argv[]) {
 				bytesSent = send(socketHandle, inputBuffer + totalSent, messageLength, 0);
 				totalSent += bytesSent;
 			} while (totalSent < messageLength);
+			//exit command
+			if (!strcmp(inputBuffer, EXIT_COMMAND)) {
+				connActive = false;
+				break;
+			}
 			memset(&inputBuffer, 0, BUFFER_SIZE);
-			recv(socketHandle, inputBuffer, BUFFER_SIZE, 0);
-			printf_s("%s\n", inputBuffer);
+			/*recv(socketHandle, inputBuffer, BUFFER_SIZE, 0);
+			printf_s("%s\n", inputBuffer);*/
 		}
 		closesocket(socketHandle);
 	}
