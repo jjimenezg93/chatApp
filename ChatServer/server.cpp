@@ -55,14 +55,19 @@ void InsertMessage(const std::string& str) {
 void * thread_clientManager(void * clientData) {
 	Client * clientPtr = reinterpret_cast<Client *>(clientData);
 	Client client;
+	SOCKET socket;
 	char buffer[BUFFER_SIZE];
 	memset(&buffer, 0, BUFFER_SIZE);
+	std::string name;
 	std::string newMessage;
 	int32_t lastMessageRead = 0;
 	int32_t rec = 0;
 	int32_t totalRec = 0;
 	pthread_mutex_lock(&t_clientsLock);
-	recv(clientPtr->socketId, buffer, BUFFER_SIZE, 0);
+	socket = clientPtr->socketId;
+	pthread_mutex_unlock(&t_clientsLock);
+	recv(socket, buffer, BUFFER_SIZE, 0);
+	pthread_mutex_lock(&t_clientsLock);
 	clientPtr->clientName = buffer;
 	client = *clientPtr;
 	pthread_mutex_unlock(&t_clientsLock);
@@ -106,18 +111,26 @@ void * thread_serverReader(void * params) {
 				clientIndex = 0;
 			}
 			pthread_mutex_lock(&t_clientsLock);
-			Client * clItr = gClients.at(clientIndex);
+			//Client * clItr = gClients.at(clientIndex);
+			std::vector<Client *>::reference clItr = gClients.at(clientIndex);
+			std::string name = clItr->clientName;
 			lastMessage = clItr->lastMessageReceived;
-			if (clItr != nullptr && clItr->clientName != "") {
-				pthread_mutex_unlock(&t_clientsLock);
+			pthread_mutex_unlock(&t_clientsLock);
+			if (clItr != nullptr && strcmp(name.c_str(), "")) {
 				uint32_t size = ChatHistorySize();
 				if (lastMessage < size) {
-					//if sent
 					pthread_mutex_lock(&t_clientsLock);
-					clItr->lastMessageReceived++;
-					pthread_mutex_unlock(&t_clientsLock);
-					printf_s("SENT");
+					//clItr->lastMessageReceived++;
+					totalSent = 0;
+					bytesSent = 0;
+					message = ReadMessage(clItr->lastMessageReceived++).c_str();
+					messageLength = strlen(message.c_str());
+					do {
+						bytesSent = send(clItr->socketId, message.c_str(), messageLength, 0);
+						totalSent += bytesSent;
+					} while (totalSent < messageLength);
 				}
+				pthread_mutex_unlock(&t_clientsLock);
 				/*pthread_mutex_lock(&t_clientsLock);
 				while (clItr->lastMessageReceived < ChatHistorySize()) {
 					pthread_mutex_unlock(&t_clientsLock);
