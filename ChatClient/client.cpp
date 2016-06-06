@@ -19,11 +19,10 @@ void * thread_clientReader(void * socketHandle) {
 	while (connActive) {
 		rec = 0;
 		totalRec = 0;
-		memset(&buffer, 0, BUFFER_SIZE);
 		do {
 			rec = recv(socket, buffer + totalRec, BUFFER_SIZE, 0);
 			totalRec += rec;
-		} while (buffer[totalRec] != '\0');
+		} while (buffer[totalRec-1] != '\0');
 		printf_s("\n%s", buffer);
 	}
 	return 0;
@@ -96,9 +95,10 @@ int main(int argc, char *argv[]) {
 				printf_s("\nEnter a valid name, please. \n");
 			} else {
 				messageLength = strlen(inputBuffer);
-				while (bytesSent < messageLength) {
-					bytesSent += send(socketHandle, inputBuffer + bytesSent, messageLength, 0);
-				}
+				do {
+					bytesSent += send(socketHandle, inputBuffer + totalSent, messageLength + 1, 0);
+					totalSent += bytesSent;
+				} while (totalSent < messageLength);
 				bytesSent = 0;
 				break;
 			}
@@ -107,13 +107,12 @@ int main(int argc, char *argv[]) {
 		printf_s("Type and press Enter to send your message: \n");
 		while (1) {
 			//get input
-			memset(&inputBuffer, 0, BUFFER_SIZE);
 			gets_s(inputBuffer, _countof(inputBuffer));
 			totalSent = 0;
 			bytesSent = 0;
 			messageLength = strlen(inputBuffer);
 			do {
-				bytesSent = send(socketHandle, inputBuffer + totalSent, messageLength, 0);
+				bytesSent = send(socketHandle, inputBuffer + totalSent, messageLength + 1, 0);
 				totalSent += bytesSent;
 			} while (totalSent < messageLength);
 			//exit command
@@ -122,8 +121,6 @@ int main(int argc, char *argv[]) {
 				break;
 			}
 			memset(&inputBuffer, 0, BUFFER_SIZE);
-			/*recv(socketHandle, inputBuffer, BUFFER_SIZE, 0);
-			printf_s("%s\n", inputBuffer);*/
 		}
 		closesocket(socketHandle);
 	}

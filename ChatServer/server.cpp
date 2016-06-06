@@ -57,7 +57,7 @@ void * thread_clientManager(void * clientData) {
 	Client client;
 	SOCKET socket;
 	char buffer[BUFFER_SIZE];
-	memset(&buffer, 0, BUFFER_SIZE);
+	buffer[0] = '\0'; //no need to set the whole buffer
 	std::string name;
 	std::string newMessage;
 	int32_t lastMessageRead = 0;
@@ -66,7 +66,11 @@ void * thread_clientManager(void * clientData) {
 	pthread_mutex_lock(&t_clientsLock);
 	socket = clientPtr->socketId;
 	pthread_mutex_unlock(&t_clientsLock);
-	recv(socket, buffer, BUFFER_SIZE, 0);
+	do {
+		rec = recv(client.socketId, buffer + totalRec, BUFFER_SIZE, 0);
+		totalRec += rec;
+		printf_s("\nrec:%d | totalRecv: %d\n", rec, totalRec);
+	} while (buffer[totalRec - 1] != '\0');
 	pthread_mutex_lock(&t_clientsLock);
 	clientPtr->clientName = buffer;
 	client = *clientPtr;
@@ -76,12 +80,11 @@ void * thread_clientManager(void * clientData) {
 	while (1) {
 		totalRec = 0;
 		rec = 0;
-		memset(&buffer, 0, BUFFER_SIZE);
 		do {
 			rec = recv(client.socketId, buffer + totalRec, BUFFER_SIZE, 0);
 			totalRec += rec;
 			printf_s("\nrec:%d | totalRecv: %d\n", rec, totalRec);
-		} while (buffer[totalRec] != '\0');
+		} while (buffer[totalRec-1] != '\0');
 		if (!strcmp(buffer, EXIT_COMMAND)) {
 			closesocket(client.socketId);
 			printf_s("%s has disconnected\n", client.clientName.c_str());
