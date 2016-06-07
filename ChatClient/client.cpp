@@ -10,21 +10,39 @@
 #define BUFFER_SIZE 4096
 const char * EXIT_COMMAND = "/q";
 bool connActive = false;
+pthread_mutex_t t_connLock = PTHREAD_MUTEX_INITIALIZER;
 
 void * thread_clientReader(void * socketHandle) {
 	SOCKET socket = reinterpret_cast<SOCKET>(socketHandle);
 	char buffer[BUFFER_SIZE];
+	int32_t errorCode;
 	int32_t rec;
 	int32_t totalRec;
-	while (connActive) {
+	while (1) {
 		rec = 0;
 		totalRec = 0;
 		do {
 			rec = recv(socket, buffer + totalRec, BUFFER_SIZE, 0);
-			totalRec += rec;
-		} while (buffer[totalRec-1] != '\0');
+			if (rec > 0) {
+				totalRec += rec;
+			} else if (rec == SOCKET_ERROR) {
+				errorCode = WSAGetLastError();
+				if (errorCode == WSAECONNRESET || errorCode == WSAECONNABORTED) {
+					printf_s("Error receiving messages from server, closing connection");
+					connActive = false;
+					break;
+				}
+			}
+		} while (totalRec > 0 && buffer[totalRec - 1] != '\0');
 		printf_s("\n%s", buffer);
+		pthread_mutex_lock(&t_connLock);
+		if (!connActive) {
+			pthread_mutex_unlock(&t_connLock);
+			break;
+		}
+		pthread_mutex_unlock(&t_connLock);
 	}
+	pthread_exit(nullptr);
 	return 0;
 }
 
@@ -34,7 +52,7 @@ int main(int argc, char *argv[]) {
 	char inputBuffer[BUFFER_SIZE];
 	memset(inputBuffer, 0, sizeof(inputBuffer));
 	pthread_t t_reader;
-	
+
 	if (argc < 2)
 		return -1;
 
@@ -87,6 +105,7 @@ int main(int argc, char *argv[]) {
 		int32_t messageLength;
 		int32_t bytesSent = 0;
 		int32_t totalSent = 0;
+		int32_t errorCode;
 
 		printf_s("Welcome! Your name: ");
 		while (1) {
@@ -94,36 +113,55 @@ int main(int argc, char *argv[]) {
 			if (inputBuffer == "") {
 				printf_s("\nEnter a valid name, please. \n");
 			} else {
+				bytesSent = 0;
 				messageLength = strlen(inputBuffer);
 				do {
 					bytesSent += send(socketHandle, inputBuffer + totalSent, messageLength + 1, 0);
 					totalSent += bytesSent;
 				} while (totalSent < messageLength);
-				bytesSent = 0;
 				break;
 			}
 		}
 		system("cls");
 		printf_s("Type and press Enter to send your message: \n");
 		while (1) {
+			pthread_mutex_lock(&t_connLock);
+			if (!connActive) {
+				pthread_mutex_unlock(&t_connLock);
+				break;
+			}
+			pthread_mutex_unlock(&t_connLock);
 			//get input
-			gets_s(inputBuffer, _countof(inputBuffer));
+			gets_s(inputBuffer, _countof(inputBuffer)); //when closing connection from reader thread,
+			//this thread is still here, so it doesn't finish until next input
 			totalSent = 0;
 			bytesSent = 0;
 			messageLength = strlen(inputBuffer);
 			do {
 				bytesSent = send(socketHandle, inputBuffer + totalSent, messageLength + 1, 0);
 				totalSent += bytesSent;
+				if (bytesSent > 0) {
+					totalSent += bytesSent;
+				} else if (bytesSent == SOCKET_ERROR) {
+					errorCode = WSAGetLastError();
+					if (errorCode == WSAECONNRESET || errorCode == WSAECONNABORTED) {
+						printf_s("Error sending messages to the server, closing connection");
+						connActive = false;
+						break;
+					}
+				}
 			} while (totalSent < messageLength);
 			//exit command
-			if (!strcmp(inputBuffer, EXIT_COMMAND)) {
+			if (!strcmp(inputBuffer, EXIT_COMMAND) || !connActive) {
+				pthread_mutex_lock(&t_connLock);
 				connActive = false;
+				pthread_mutex_unlock(&t_connLock);
 				break;
 			}
 			memset(&inputBuffer, 0, BUFFER_SIZE);
 		}
 		closesocket(socketHandle);
 	}
-
+	getchar();
 	return 0;
 }

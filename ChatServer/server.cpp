@@ -16,7 +16,7 @@ struct Client {
 	Client(): socketId(0), clientName(""), lastMessageReceived(0) {}
 	SOCKET socketId;
 	std::string clientName;
-	int32_t lastMessageReceived;
+	uint32_t lastMessageReceived;
 };
 
 std::vector<Client *> gClients;
@@ -29,6 +29,22 @@ const uint32_t ClientsSize() {
 	uint32_t size = gClients.size();
 	pthread_mutex_unlock(&t_chatHistoryLock);
 	return size;
+}
+
+void RemoveClient(const std::string& name) {
+	pthread_mutex_lock(&t_clientsLock);
+	std::vector<Client *>::iterator clItr = gClients.begin();
+	while (clItr != gClients.end()) {
+		if ((*clItr)->clientName == name) {
+			Client * cToDelete = *clItr;
+			clItr = gClients.erase(clItr);
+			delete cToDelete;
+		} else {
+			clItr++;
+		}
+	}
+
+	pthread_mutex_unlock(&t_clientsLock);
 }
 
 const uint32_t ChatHistorySize() {
@@ -64,13 +80,14 @@ void * thread_clientManager(void * clientData) {
 	int32_t rec = 0;
 	int32_t totalRec = 0;
 	pthread_mutex_lock(&t_clientsLock);
-	socket = clientPtr->socketId;
+	client = *clientPtr;
 	pthread_mutex_unlock(&t_clientsLock);
 	do {
 		rec = recv(client.socketId, buffer + totalRec, BUFFER_SIZE, 0);
-		totalRec += rec;
-		printf_s("\nrec:%d | totalRecv: %d\n", rec, totalRec);
-	} while (buffer[totalRec - 1] != '\0');
+		if (rec > 0) {
+			totalRec += rec;
+		}
+	} while (totalRec <= 0 && buffer[totalRec - 1] != '\0');
 	pthread_mutex_lock(&t_clientsLock);
 	clientPtr->clientName = buffer;
 	client = *clientPtr;
@@ -82,19 +99,32 @@ void * thread_clientManager(void * clientData) {
 		rec = 0;
 		do {
 			rec = recv(client.socketId, buffer + totalRec, BUFFER_SIZE, 0);
-			totalRec += rec;
-			printf_s("\nrec:%d | totalRecv: %d\n", rec, totalRec);
-		} while (buffer[totalRec-1] != '\0');
+			if (rec > 0) {
+				totalRec += rec;
+				printf_s("\nrec:%d | totalRecv: %d | from %s\n",
+					rec, totalRec, client.clientName.c_str());
+			}
+		} while (buffer[totalRec - 1] != '\0' && rec != -1);
+		if (rec == -1) {
+			closesocket(client.socketId);
+			std::string msg = client.clientName;
+			InsertMessage(msg.append(" has lost connection\n"));
+			RemoveClient(client.clientName);
+			printf_s("%s", msg.c_str());
+			pthread_exit(nullptr);
+			return 0;
+		}
 		if (!strcmp(buffer, EXIT_COMMAND)) {
 			closesocket(client.socketId);
-			printf_s("%s has disconnected\n", client.clientName.c_str());
+			std::string msg = client.clientName;
+			InsertMessage(msg.append(" has disconnected\n"));
+			RemoveClient(client.clientName);
+			printf_s("%s", msg.c_str());
 			pthread_exit(nullptr);
 			return 0;
 		}
 		//add message to history
-		pthread_mutex_lock(&t_clientsLock);
 		newMessage = client.clientName;
-		pthread_mutex_unlock(&t_clientsLock);
 		InsertMessage(newMessage.append(": ").append(buffer).append("\n"));
 	}
 	return 0;
@@ -106,53 +136,53 @@ void * thread_serverReader(void * params) {
 	int32_t bytesSent = 0;
 	int32_t totalSent = 0;
 	int32_t clientIndex = 0;
+	/*pthread_mutex_lock(&t_clientsLock);
+	std::vector<Client *>::iterator clientItr = gClients.begin();
+	pthread_mutex_unlock(&t_clientsLock);*/
+	int32_t errorCode;
 	uint32_t lastMessage = 0;
 	std::string message;
 	while (1) {
-		if (ClientsSize() != 0) {
-			if (clientIndex >= ClientsSize()) {
-				clientIndex = 0;
-			}
-			pthread_mutex_lock(&t_clientsLock);
-			//Client * clItr = gClients.at(clientIndex);
-			std::vector<Client *>::reference clItr = gClients.at(clientIndex);
-			std::string name = clItr->clientName;
-			lastMessage = clItr->lastMessageReceived;
-			pthread_mutex_unlock(&t_clientsLock);
-			if (clItr != nullptr && strcmp(name.c_str(), "")) {
-				uint32_t size = ChatHistorySize();
-				if (lastMessage < size) {
-					pthread_mutex_lock(&t_clientsLock);
-					//clItr->lastMessageReceived++;
-					totalSent = 0;
-					bytesSent = 0;
-					message = ReadMessage(clItr->lastMessageReceived++).c_str();
-					messageLength = strlen(message.c_str());
-					do {
-						bytesSent = send(clItr->socketId, message.c_str(), messageLength, 0);
-						totalSent += bytesSent;
-					} while (totalSent < messageLength);
-				}
+		uint32_t numMsgs = ChatHistorySize();
+		pthread_mutex_lock(&t_clientsLock);
+		if (gClients.size() != 0 && clientIndex < gClients.size()) {
+			Client * clItr = gClients.at(clientIndex);
+			if (clItr->clientName == "" || clItr->lastMessageReceived >= numMsgs) {
 				pthread_mutex_unlock(&t_clientsLock);
-				/*pthread_mutex_lock(&t_clientsLock);
-				while (clItr->lastMessageReceived < ChatHistorySize()) {
-					pthread_mutex_unlock(&t_clientsLock);
-					totalSent = 0;
-					bytesSent = 0;
-					pthread_mutex_lock(&t_clientsLock);
-					message = ReadMessage(clItr->lastMessageReceived++).c_str();
-					messageLength = strlen(message.c_str());
-					do {
-						bytesSent = send(clItr->socketId, message.c_str(), messageLength, 0);
-						totalSent += bytesSent;
-					} while (totalSent < messageLength);
-					pthread_mutex_unlock(&t_clientsLock);
-					printf_s("SENT %s\n", message.c_str());
-				}*/
+				continue;
 			} else {
+				totalSent = 0;
+				bytesSent = 0;
+				message = ReadMessage(clItr->lastMessageReceived++).c_str();
+				messageLength = strlen(message.c_str());
+				do {
+					bytesSent = send(clItr->socketId, message.c_str(), messageLength + 1, 0);
+					if (bytesSent > 0)
+						totalSent += bytesSent;
+					else if (bytesSent == SOCKET_ERROR) {
+						errorCode = WSAGetLastError();
+						if (errorCode == WSAETIMEDOUT) {
+							message = clItr->clientName;
+							printf_s(message.append(" has timed out").c_str());
+							InsertMessage(message);
+							continue;
+						} else if (errorCode == WSAECONNRESET || errorCode == WSAECONNABORTED) {
+							printf_s("Error sending message to %s, closing connection",
+								clItr->clientName.c_str());
+							//how to tell to the thread_clientManager it must exit?
+							continue;
+						}
+					}
+				} while (totalSent < messageLength);
+				clItr->lastMessageReceived++;
 				pthread_mutex_unlock(&t_clientsLock);
 			}
-			clientIndex++;
+		} else {
+			pthread_mutex_unlock(&t_clientsLock);
+		}
+		clientIndex++;
+		if (clientIndex >= ClientsSize()) {
+			clientIndex = 0;
 		}
 	}
 }
