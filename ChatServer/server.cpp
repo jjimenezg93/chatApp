@@ -43,7 +43,6 @@ void RemoveClient(const std::string& name) {
 			clItr++;
 		}
 	}
-
 	pthread_mutex_unlock(&t_clientsLock);
 }
 
@@ -67,13 +66,13 @@ void InsertMessage(const std::string& str) {
 	pthread_mutex_unlock(&t_chatHistoryLock);
 }
 
-//creates local copy of client's info and only needs access to gClients to set their name
+/* creates local copy of client's info and only needs access to gClients to set their name
+this reduces the time it gets the mutex locked */
 void * thread_clientManager(void * clientData) {
 	Client * clientPtr = reinterpret_cast<Client *>(clientData);
 	Client client;
-	SOCKET socket;
 	char buffer[BUFFER_SIZE];
-	buffer[0] = '\0'; //no need to set the whole buffer
+	buffer[0] = '\0';
 	std::string name;
 	std::string newMessage;
 	int32_t lastMessageRead = 0;
@@ -136,16 +135,13 @@ void * thread_serverReader(void * params) {
 	int32_t bytesSent = 0;
 	int32_t totalSent = 0;
 	int32_t clientIndex = 0;
-	/*pthread_mutex_lock(&t_clientsLock);
-	std::vector<Client *>::iterator clientItr = gClients.begin();
-	pthread_mutex_unlock(&t_clientsLock);*/
 	int32_t errorCode;
 	uint32_t lastMessage = 0;
 	std::string message;
 	while (1) {
 		uint32_t numMsgs = ChatHistorySize();
 		pthread_mutex_lock(&t_clientsLock);
-		if (gClients.size() != 0 && clientIndex < gClients.size()) {
+		if (gClients.size() != 0 && clientIndex < static_cast<int32_t>(gClients.size())) {
 			Client * clItr = gClients.at(clientIndex);
 			if (clItr->clientName == "" || clItr->lastMessageReceived >= numMsgs) {
 				pthread_mutex_unlock(&t_clientsLock);
@@ -153,7 +149,7 @@ void * thread_serverReader(void * params) {
 			} else {
 				totalSent = 0;
 				bytesSent = 0;
-				message = ReadMessage(clItr->lastMessageReceived++).c_str();
+				message = ReadMessage(clItr->lastMessageReceived).c_str();
 				messageLength = strlen(message.c_str());
 				do {
 					bytesSent = send(clItr->socketId, message.c_str(), messageLength + 1, 0);
@@ -169,7 +165,6 @@ void * thread_serverReader(void * params) {
 						} else if (errorCode == WSAECONNRESET || errorCode == WSAECONNABORTED) {
 							printf_s("Error sending message to %s, closing connection",
 								clItr->clientName.c_str());
-							//how to tell to the thread_clientManager it must exit?
 							continue;
 						}
 					}
@@ -181,7 +176,7 @@ void * thread_serverReader(void * params) {
 			pthread_mutex_unlock(&t_clientsLock);
 		}
 		clientIndex++;
-		if (clientIndex >= ClientsSize()) {
+		if (static_cast<uint32_t>(clientIndex) >= ClientsSize()) {
 			clientIndex = 0;
 		}
 	}
@@ -193,7 +188,6 @@ int main() {
 	SOCKET listeningSocket;
 	sockaddr_in servInfo;
 	sockaddr_in clientInfo;
-	char buffer[BUFFER_SIZE];
 	//thread to send all updates to clients
 	pthread_t t_reader;
 	pthread_create(&t_reader, nullptr, thread_serverReader, nullptr);
@@ -237,6 +231,7 @@ int main() {
 		memset(&clientInfo, 0, sizeof(clientInfo));
 		Client * newClient = new Client();
 		newClient->socketId = accept(listeningSocket, (sockaddr *)&clientInfo, &sock_len);
+		newClient->lastMessageReceived = ChatHistorySize();
 		if (newClient->socketId != INVALID_SOCKET) {
 			char clientIP[INET_ADDRSTRLEN];
 			inet_ntop(AF_INET, &clientInfo.sin_addr, clientIP, sizeof(clientIP));

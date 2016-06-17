@@ -34,13 +34,13 @@ void * thread_clientReader(void * socketHandle) {
 				}
 			}
 		} while (totalRec > 0 && buffer[totalRec - 1] != '\0');
-		printf_s("\n%s", buffer);
 		pthread_mutex_lock(&t_connLock);
 		if (!connActive) {
 			pthread_mutex_unlock(&t_connLock);
 			break;
 		}
 		pthread_mutex_unlock(&t_connLock);
+		printf_s("\n%s", buffer);
 	}
 	pthread_exit(nullptr);
 	return 0;
@@ -110,8 +110,8 @@ int main(int argc, char *argv[]) {
 		printf_s("Welcome! Your name: ");
 		while (1) {
 			gets_s(inputBuffer, _countof(inputBuffer));
-			if (inputBuffer == "") {
-				printf_s("\nEnter a valid name, please. \n");
+			if (!strcmp(inputBuffer, "")) {
+				printf_s("\nEnter a valid name, please.\n");
 			} else {
 				bytesSent = 0;
 				messageLength = strlen(inputBuffer);
@@ -132,8 +132,7 @@ int main(int argc, char *argv[]) {
 			}
 			pthread_mutex_unlock(&t_connLock);
 			//get input
-			gets_s(inputBuffer, _countof(inputBuffer)); //when closing connection from reader thread,
-			//this thread is still here, so it doesn't finish until next input
+			gets_s(inputBuffer, _countof(inputBuffer));
 			totalSent = 0;
 			bytesSent = 0;
 			messageLength = strlen(inputBuffer);
